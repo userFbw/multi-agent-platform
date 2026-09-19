@@ -1,0 +1,35 @@
+# 平台后端依赖。版本就是 new_venv 里实际装的那套，Python 3.14.4。
+#
+# 换机器重建环境：
+#   python3 -m venv new_venv
+#   new_venv/bin/python -m pip install -r requirements.txt
+
+# 代码里直接 import 的
+fastapi==0.141.1            # web 框架
+uvicorn==0.52.4             # 跑服务的（python -m uvicorn main:app）
+SQLAlchemy==2.0.52          # ORM
+pydantic==2.13.5            # 参数校验
+python-dotenv==1.2.3        # 读 backend/.env
+python-multipart==0.0.32    # 头像上传要用
+
+
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.0
+certifi==2026.7.22
+click==8.5.0
+greenlet==3.5.5
+h11==0.16.0
+httpcore==1.0.9
+httptools==0.8.0
+httpx==0.28.1               
+idna==3.19
+pydantic_core==2.46.5
+PyYAML==6.0.3               
+starlette==1.6.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uvloop==0.22.1              
+watchfiles==1.2.0           
+websockets==17.1            
+
