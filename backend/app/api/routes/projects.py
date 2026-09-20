@@ -25,11 +25,11 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.agents import node_inputs
-from app.agents.orchestrator import step_orchestrator
+from app.agents.orchestrator import step_orchestrator, read_project_prd
 from app.runner import env as app_env
 from app.runner import process as app_runner
 from app.agents.workflow_engine import (
-    WorkflowError, ensure_prd_node, resolve_workflow, validate_workflow,
+    WorkflowError, ensure_prd_node, resolve_workflow, shape_mismatch_warning, validate_workflow,
 )
 from app.api.deps import assert_owner, current_user_id
 from app.db.crud import agents_crud, project_steps_crud
@@ -203,6 +203,17 @@ async def api_get_project_detail(
     project = get_project_by_id(db, project_id)
     assert_owner(project, uid, "项目")
 
+    # 审批前的形态预检：PRD 判的运行形态 vs 项目选定的图能产出什么。
+    # 只在「待审批」时算（那一刻用户正好要做决定），算不出来也不影响详情接口。
+    # agent 模式跳过：那张图要等审批通过后由编排官现场出，此刻还不存在，比了也是误报。
+    plan_warning = ""
+    if project.status == "PENDING_APPROVAL" and (project.mode or "workflow") != "agent":
+        try:
+            wf = step_orchestrator._project_workflow(db, project)
+            plan_warning = shape_mismatch_warning(wf, read_project_prd(db, project))
+        except Exception:  # noqa: BLE001 —— 预检是加分项，绝不能拖垮详情接口
+            plan_warning = ""
+
     return {
         "id": project.id,
         "user_id": project.user_id,
@@ -217,6 +228,9 @@ async def api_get_project_detail(
         # 编排模式：workflow（图先存在）/ agent（审批后编排官出图）。
         # 前端据此决定审批卡片上怎么措辞（"按这张图跑" vs "由编排官自行决定节点"）。
         "mode": project.mode or "workflow",
+        # 形态预检提示（可能为空串）：PRD 说"前后端分离"、图里却没有后端节点时给一句话，
+        # 让用户在点「通过审批」之前就知道这张图跑不出他要的东西。
+        "plan_warning": plan_warning,
     }
 
 

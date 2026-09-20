@@ -13,7 +13,7 @@ import AppRunner from '@/components/task/AppRunner.vue'
 import Markdown from '@/components/common/Markdown.vue'
 import { fromNow } from '@/utils/format'
 import type { Artifact } from '@/types/task'
-import { FileText, LoaderCircle, RefreshCw, X } from '@lucide/vue'
+import { AlertTriangle, FileText, LoaderCircle, RefreshCw, X } from '@lucide/vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,6 +36,12 @@ async function load() {
 }
 
 watch(id, load, { immediate: true })
+
+// 状态从终态回到活动（点了审批 / 迭代 / 续跑）时也要把轮询开起来 —— 只靠 load() 那次判断不够
+watch(active, (on) => {
+  if (on) store.startPolling(id.value)
+  else store.stopPolling()
+})
 
 onBeforeUnmount(() => store.stopPolling())
 
@@ -79,6 +85,13 @@ const isMarkdown = (a: Artifact) =>
         </div>
 
         <p v-if="store.error" class="detail__error">{{ store.error }}</p>
+
+        <!-- 形态预检（后端在「待审批」时算的）：PRD 判的运行形态与这张图对不上时提醒一句。
+             只提示不阻断 —— 是不是换图由用户自己决定。 -->
+        <p v-if="task.planWarning" class="detail__plan-warn">
+          <AlertTriangle :size="13" :stroke-width="2.2" />
+          <span>{{ task.planWarning }}</span>
+        </p>
 
         <!-- 终止反馈（刚点完「终止运行」） -->
         <p
@@ -203,6 +216,20 @@ const isMarkdown = (a: Artifact) =>
   color: var(--color-text-secondary);
 }
 .detail__abort-note--bad { color: var(--color-danger); }
+.detail__plan-warn {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 0 0 14px 44px;
+  padding: 9px 11px;
+  border: 1px solid var(--color-warn-border, var(--color-border));
+  border-radius: var(--radius-md);
+  background: var(--color-warn-bg, var(--color-sidebar));
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+.detail__plan-warn svg { flex: none; margin-top: 2px; color: var(--color-warn, var(--color-danger)); }
 .detail__aborted {
   margin: 0 0 14px 44px;
   padding: 10px 12px;

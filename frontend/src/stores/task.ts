@@ -75,10 +75,11 @@ export const useTaskStore = defineStore('task', () => {
     currentId.value ? tasks.value[currentId.value] ?? null : null
   )
 
-  async function loadProjects(): Promise<void> {
+  /** 拉项目列表。`silent` = 后台轮询用：不动 loading，避免列表页每 5 秒闪一次加载态。 */
+  async function loadProjects(opts: { silent?: boolean } = {}): Promise<void> {
     const auth = useAuthStore()
     if (!auth.user) return
-    loading.value = true
+    if (!opts.silent) loading.value = true
     error.value = ''
     try {
       const projects = await projectApi.list(auth.user.id)
@@ -86,7 +87,7 @@ export const useTaskStore = defineStore('task', () => {
     } catch (e) {
       error.value = (e as Error).message
     } finally {
-      loading.value = false
+      if (!opts.silent) loading.value = false
     }
   }
 
@@ -171,6 +172,7 @@ export const useTaskStore = defineStore('task', () => {
         zipPath: project.zip_path ?? null,
         workflowName: project.workflow_name ?? null,
         mode: project.mode ?? 'workflow',
+        planWarning: project.plan_warning ?? '',
         roundNo: stepsResp?.round_no ?? rounds?.latest_round ?? 1,
         rounds: rounds?.rounds ?? [],
         steps,
@@ -218,6 +220,7 @@ export const useTaskStore = defineStore('task', () => {
     try {
       await projectApi.approve(Number(id), true, opts?.feedback, opts)
       await loadTask(id, { silent: true })
+      startPolling(id)          // 状态回到 running：把轮询重新开起来，别等用户手动刷新
     } catch (e) {
       error.value = (e as Error).message
     }
@@ -228,6 +231,7 @@ export const useTaskStore = defineStore('task', () => {
     try {
       await projectApi.approve(Number(id), false, feedback)
       await loadTask(id, { silent: true })
+      startPolling(id)          // 驳回会重跑 PRD 段，同样要跟着刷
     } catch (e) {
       error.value = (e as Error).message
     }
@@ -245,6 +249,7 @@ export const useTaskStore = defineStore('task', () => {
     try {
       await projectApi.revise(Number(id), feedback, opts, iteration)
       await loadTask(id, { silent: true })
+      startPolling(id)          // 迭代也是长任务，提交完就得开始刷
       if (iteration === 'incremental') {
         appFeedback.value = { kind: 'ok', text: '已按「增量修改」重跑：会保留现有代码，只改你要求的部分' }
       }

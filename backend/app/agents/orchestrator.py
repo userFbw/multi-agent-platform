@@ -13,6 +13,7 @@ step_3_run_dev / step_3_revise_dev / run_qa_stage。它自己不做编排，只�
 """
 
 import asyncio
+import json
 import os
 import shutil
 import tempfile
@@ -218,6 +219,67 @@ class StepOrchestrator:
             "artifact_path": getattr(pm_row, "path", "") or "",
             "error": None, "error_code": None, "attempts": 0,
         }}
+
+    def _segment2_preset(self, db, project, wf: dict, gate: str,
+                         prd_text: str, pm_row) -> dict:
+        """第二段的预置集合 = 闸门节点 + **第一段里跟它一起跑过的上游节点**。
+
+        一次生成被切成两段（PRD 段 / 审批之后的其余段）。以前只把闸门节点（PM）预置进第二段，
+        于是画在 PM **前面**的节点（比如"用户理解人员"）在第一段跑一次、审批之后又跑一次
+        —— 真机就是同一个自定义角色跑了两次（p53 的步骤 #1 与 #4），白费额度、步骤列表也重复。
+
+        这里把闸门的上游一并预置掉，输出从**已经落盘的产物**读回来（按节点名找最近一次成功的
+        步骤行），这样下游引用（如 PM 的输入指向它）照常拿得到内容。
+
+        产物找不到或读不出来就跳过预置 —— 宁可贵一点重跑一次，也不能少给下游输入。
+        """
+        preset = self._prd_preset(gate, prd_text, pm_row)
+        nodes = (wf or {}).get("nodes") or []
+        if not gate or not nodes:
+            return preset
+        ups = workflow_engine.ancestors_of(nodes, gate) - {gate}
+        if not ups:
+            return preset
+
+        by_id = {n.get("id"): n for n in nodes}
+        # 节点名 → 最近一次成功的步骤行。同一张图里节点名唯一（重命名功能就是为区分同名节点加的）。
+        latest: dict = {}
+        try:
+            for rnd in range(project_steps_crud.get_latest_round(db, project.id), 0, -1):
+                for row in project_steps_crud.get_steps(db, project.id, rnd):
+                    if row.status == "SUCCESS" and row.artifact_path and row.name not in latest:
+                        latest[row.name] = row
+        except Exception as e:  # noqa: BLE001 —— 读不到就退回旧行为
+            self._log(f"读已有步骤失败（{e}），PRD 段上游按旧行为重跑")
+            return preset
+
+        for nid in sorted(ups):
+            nd = by_id.get(nid) or {}
+            name = nd.get("name") or nid
+            row = latest.get(name)
+            if not row:
+                self._log(f"PRD 段上游节点「{name}」没有可复用的产物，第二段会重跑它")
+                continue
+            try:
+                text = file_helper.read_file_by_db_path(project.user_id, project.id, row.artifact_path)
+            except Exception as e:  # noqa: BLE001
+                self._log(f"PRD 段上游节点「{name}」的产物读不出来（{e}），第二段会重跑它")
+                continue
+            parsed = None
+            if (nd.get("output_kind") or "") == "json_array":
+                try:
+                    parsed = json.loads(text)
+                except Exception:  # noqa: BLE001
+                    parsed = None
+            preset[nid] = {
+                "success": True, "output": text, "parsed": parsed,
+                "session_id": row.session_id,
+                "elapsed_seconds": (row.elapsed_ms or 0) / 1000.0,
+                "files": [], "contract": {}, "artifact_path": row.artifact_path,
+                "error": None, "error_code": None, "attempts": 0,
+            }
+            self._log(f"PRD 段上游节点「{name}」第一段已跑过，第二段不再重跑")
+        return preset
 
     @staticmethod
     def _prd_text_of(project, result: dict, gate: str) -> str:
@@ -737,7 +799,7 @@ class StepOrchestrator:
             gate = workflow_engine.find_prd_node(chosen)
             prd_text = prd_with_feedback(prd_text, feedback)
             result = await self._dev_chain(db, project, prd_text, chosen,
-                                           preset=self._prd_preset(gate, prd_text, pm_row))
+                                           preset=self._segment2_preset(db, project, chosen, gate, prd_text, pm_row))
             zip_path = await self._finalize_async(db, project, result)
             self._log(f"开发链完成（{result.get('workflow', '?')}），已打包 {zip_path}，项目 COMPLETED")
         except Exception as e:  # noqa: BLE001
@@ -839,7 +901,7 @@ class StepOrchestrator:
             src_abs = os.path.join(self._project_dir(project.user_id, project.id), "src")
             snap_before = self._snapshot_tree(src_abs) if incremental else {}
             result = await self._dev_chain(db, project, synthesized, chosen,
-                                           preset=self._prd_preset(gate, synthesized, pm_row),
+                                           preset=self._segment2_preset(db, project, chosen, gate, synthesized, pm_row),
                                            incremental=incremental)
             if incremental:
                 self._write_change_manifest(project, snap_before, round_no, src_abs)

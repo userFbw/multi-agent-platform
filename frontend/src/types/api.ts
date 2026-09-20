@@ -40,6 +40,8 @@ export interface ApiProject {
   workflow_id?: number | null
   /** 编排模式（§2.1）：workflow = 图先画好；agent = 审批后由编排官读 PRD 出图 */
   mode?: ApiProjectMode
+  /** 审批前的形态预检提示（§2.1）：PRD 判的运行形态与这张图对不上时给一句话，空串=没问题 */
+  plan_warning?: string | null
 }
 
 /** 编排模式：两种模式的审批闸门都在 PM 之后，差别只在"通过之后图从哪来" */

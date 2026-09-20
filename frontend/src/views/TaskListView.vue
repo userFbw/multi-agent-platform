@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTaskStore } from '@/stores/task'
 import { useAuthStore } from '@/stores/auth'
@@ -12,7 +12,40 @@ const router = useRouter()
 const store = useTaskStore()
 const auth = useAuthStore()
 
-onMounted(() => store.loadProjects())
+/**
+ * 列表页轮询：只要列表里还有"活动状态"的项目，就每 5 秒静默刷一次；全部终态自动停。
+ * 为什么需要：以前这里只在进页面时拉一次，项目跑完了这一行还停在"进行中"，
+ * 必须自己按浏览器刷新才看得到结果（实测反馈）。
+ */
+const ACTIVE_STATUS: TaskStatus[] = ['pending', 'running', 'awaiting_approval']
+let listTimer: number | null = null
+
+async function pollList() {
+  await store.loadProjects({ silent: true })
+  syncListTimer()
+}
+
+function syncListTimer() {
+  const hasActive = store.list.some((t) => ACTIVE_STATUS.includes(t.status))
+  if (hasActive && listTimer === null) {
+    listTimer = window.setInterval(pollList, 5000)
+  } else if (!hasActive && listTimer !== null) {
+    window.clearInterval(listTimer)
+    listTimer = null
+  }
+}
+
+onMounted(async () => {
+  await store.loadProjects()
+  syncListTimer()
+})
+
+// 状态一变就重新判断（刚提交任务 → 开始轮询；全部跑完 → 自动停）
+watch(() => store.list.map((t) => t.status).join(','), syncListTimer)
+
+onBeforeUnmount(() => {
+  if (listTimer !== null) window.clearInterval(listTimer)
+})
 
 const keyword = ref('')
 const filter = ref<'all' | TaskStatus>('all')

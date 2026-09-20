@@ -19,6 +19,7 @@ Agent（经 ai_client 拉起 DSH 会话）→ 产物落项目目录 → 每步�
 """
 import asyncio
 import os
+import re
 import shutil
 import tempfile
 import traceback
@@ -164,7 +165,14 @@ def validate_workflow(workflow: dict) -> dict:
             raise WorkflowError(f"节点 id 缺失或重复: {nid!r}")
         ids.add(nid)
         agent = nd.get("agent") or {}
-        if "id" not in agent and not agent.get("role_key"):
+        aid = agent.get("id")
+        if aid not in (None, "", 0, "0"):
+            try:
+                int(aid)
+            except (TypeError, ValueError):
+                raise WorkflowError(f"节点 {nid} 的 agent.id 不是数字: {aid!r}")
+        elif not (agent.get("role_key") or "").strip():
+            # id 为空就等于没给，这时必须给 role_key（画布保存的图走的就是 role_key 这条路）
             raise WorkflowError(f"节点 {nid} 缺少 agent(id/role_key)")
         if nd.get("code_dir"):
             code_dirs.add(nd["code_dir"])
@@ -604,6 +612,41 @@ def project_template_hint(wf: dict) -> str:
             "项目流程是 PM 出 PRD → 人工审批 → 再按图继续。")
 
 
+# 产出后端代码的角色 / 只产出静态页的角色（判"这张图能不能交出前后端分离的应用"用）
+BACKEND_ROLES = ("backend-executor",)
+STATIC_ONLY_ROLES = ("simple-frontend",)
+
+
+def shape_mismatch_warning(wf: dict, prd_text: str) -> str:
+    """审批前的**形态预检**：PRD 判定的运行形态，与这张图实际能产出的东西，对不对得上。
+
+    只返回一句人话（"" = 没问题），**不做阻断**：判断依据是 PRD 正文里的「运行形态」那一行，
+    决定权仍在用户手上。真机踩到过：PRD 判「前后端分离」（备忘录要持久化数据），
+    图却是 pm → 简单前端 → QA —— 跑完只有三个前端文件，QA 判 FAIL、白烧一轮额度。
+    """
+    if not prd_text:
+        return ""
+    m = re.search(r"运行形态\**[ \t]*[:：][ \t]*\**[ \t]*(纯前端|前后端分离)", prd_text)
+    if not m:
+        return ""
+    shape = m.group(1)
+    roles = {(nd.get("agent") or {}).get("role_key") or "" for nd in (wf or {}).get("nodes") or []}
+    has_backend = any(r in roles for r in BACKEND_ROLES)
+    has_static = any(r in roles for r in STATIC_ONLY_ROLES)
+
+    if shape == "前后端分离" and not has_backend:
+        tip = "建议改用内置「复杂项目」模板，或在画布上补：架构师 → 后端开发 ∥ 前端开发 → 测试。"
+        if has_static:
+            tip = ("图里现在只有「简单前端」（simple-frontend），它只产出 HTML/CSS/JS 静态页。"
+                   "建议改用内置「复杂项目」模板，或把「简单前端」换成 架构师 + 后端开发 + 前端开发 + 测试。")
+        return (f"这张图产不出后端：没有「后端开发」节点（backend-executor），"
+                f"而 PRD 判定为「前后端分离」。这样跑下去 QA 大概率判不通过（交付物只有前端）。{tip}")
+    if shape == "纯前端" and has_backend:
+        return ("PRD 判定为「纯前端」，但图里有「后端开发」节点，会产出与需求不符的后端代码。"
+                "建议改用内置「简单项目」模板。")
+    return ""
+
+
 async def run_workflow(
     db,
     *,
@@ -696,15 +739,26 @@ async def run_workflow(
 
         第三种是给画布用的：前端连线时只知道 `role_key`（拖进来的是"我的 Agent"，
         它拿不到 user_id），所以内置里找不到就再到**项目属主**的自定义里找。
+
+        ⚠️ 判据是"id 的值有没有效"，不是"有没有 id 这个键"：画布保存的图里节点是
+        `{"id": None, "role_key": "pm", "user_id": None}` —— 有 id 键但值是 null。
+        以前只判 `"id" in spec`，于是 `int(None)` 抛 TypeError，项目一开跑就 FAILED，
+        连一行步骤记录都留不下（p49 就是这么废掉的）。所以 id 为空时按 role_key 查。
         """
         spec = nd.get("agent") or {}
-        if "id" in spec:
-            row = agents_crud.get_by_id(db, int(spec["id"]))
-        else:
-            role_key = spec.get("role_key")
-            row = agents_crud.get_by_role_key(db, role_key, user_id=spec.get("user_id"))
-            if not row and spec.get("user_id") is None:
-                row = agents_crud.get_by_role_key(db, role_key, user_id=user_id)
+        aid = spec.get("id")
+        if aid not in (None, "", 0, "0"):
+            row = agents_crud.get_by_id(db, int(aid))
+            if not row:
+                raise WorkflowError(f"agents 注册表找不到节点 {nd['id']} 的 agent: {spec}")
+            return row
+
+        role_key = (spec.get("role_key") or "").strip()
+        if not role_key:
+            raise WorkflowError(f"节点 {nd['id']} 的 agent 既没有有效 id 也没有 role_key: {spec}")
+        row = agents_crud.get_by_role_key(db, role_key, user_id=spec.get("user_id"))
+        if not row and spec.get("user_id") is None:
+            row = agents_crud.get_by_role_key(db, role_key, user_id=user_id)
         if not row:
             raise WorkflowError(f"agents 注册表找不到节点 {nd['id']} 的 agent: {spec}")
         return row

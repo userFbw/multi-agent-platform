@@ -113,6 +113,8 @@ export interface Task {
   workflowName: string | null
   /** 编排模式：workflow（图先存在）/ agent（审批后编排官出图） */
   mode: ApiProjectMode
+  /** 审批前的形态预检提示（空串 = 没问题）：PRD 判的运行形态与项目选定的图对不上时才非空 */
+  planWarning: string
   roundNo: number
   rounds: number[]
   steps: TaskStep[]
