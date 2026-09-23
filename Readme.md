@@ -48,15 +48,6 @@ cd "/opt/multi agent/frontend" && npm run dev -- --host 0.0.0.0 --port 3000
 cd "/opt/multi agent/backend" && PYTHONPATH=. "/opt/multi agent/new_venv/bin/python" app/db/init_db.py
 ```
 
-## 演示账号
-
-| 账号 | 密码 | 说明 |
-|---|---|---|
-| `cwf` | `123456` | 早期测试账号 |
-| `fbw` | `123456` | 10 个项目，有几个前后端分离的 |
-| `fbw112233` | `111` | 2 个项目（五子棋、计时器） |
-
-密码是明文存在 `backend/data/project.db` 里的，课程设计没做加密，正式用要改。
 
 ## 使用流程
 
@@ -106,10 +97,3 @@ cd "/opt/multi agent/backend" && PYTHONPATH=. "/opt/multi agent/new_venv/bin/pyt
 | `项目架构.md` | 系统架构、实现方法、技术栈、数据表、接口 |
 | `requirements.txt` | 后端依赖，与 `new_venv` 一致 |
 | `项目实施方案.md` | 题目需求和总体方案 |
-
-## 目前没做的
-
-- 登录只做到"能识别是谁"，没做完整的权限校验，密码也没加密
-- 单机单实例部署，SQLite 单文件，没有容器化和 CI，隔离靠 bubblewrap 加项目自己的虚拟环境
-- 生成的代码质量取决于模型，平台只保证流程走通和"确实真跑过"
-- 也没给会话加强制超时，卡住了靠用户在页面上点终止
